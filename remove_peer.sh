@@ -1,7 +1,11 @@
 set -e
 
 WG_DIR="/etc/wireguard"
-
+clear
+echo "=============================="
+echo "GLMBX WIREGUARD PEER-REMOVER"
+echo "=============================="
+echo ""
 # List available tunnels
 echo "Available tunnels:"
 ls $WG_DIR | grep '\.conf$' | sed 's/\.conf//'
