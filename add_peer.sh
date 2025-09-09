@@ -29,16 +29,24 @@ if [ ! -f "$WG_CONF" ]; then
     exit 1
 fi
 
-# Server pubkey
+# Server pubkey - intentar obtenerla de diferentes formas
 SERVER_PUBKEY_FILE="$WG_DIR/${TUNNEL_NAME}-pubkey"
-if [ ! -f "$SERVER_PUBKEY_FILE" ]; then
-    echo "Server public key file $SERVER_PUBKEY_FILE not found!"
-    exit 1
+if [ -f "$SERVER_PUBKEY_FILE" ]; then
+    # Método 1: Archivo de clave pública (túneles creados con script)
+    SERVER_PUBKEY=$(cat "$SERVER_PUBKEY_FILE")
+    echo "Using server public key from file: $SERVER_PUBKEY_FILE"
+else
+    # Método 2: Extraer de la clave privada en el archivo de configuración (túneles existentes)
+    echo "Server public key file not found, extracting from configuration..."
+    SERVER_PRIVKEY=$(grep "PrivateKey" "$WG_CONF" | head -n1 | cut -d'=' -f2 | tr -d ' ')
+    if [ -n "$SERVER_PRIVKEY" ]; then
+        SERVER_PUBKEY=$(echo "$SERVER_PRIVKEY" | wg pubkey)
+        echo "Extracted server public key from configuration: $SERVER_PUBKEY"
+    else
+        echo "ERROR: Could not find server private key in $WG_CONF"
+        exit 1
+    fi
 fi
-SERVER_PUBKEY=$(cat "$SERVER_PUBKEY_FILE")
-
-# Usar los valores del config.txt en lugar de buscarlos en el archivo de configuración
-# Ya están cargados: ENDPOINT, PORT, TUNNEL_NET, DNS
 
 # Verificar que los valores necesarios existen
 if [ -z "$ENDPOINT" ] || [ -z "$PORT" ] || [ -z "$TUNNEL_NET" ]; then
@@ -76,6 +84,15 @@ while true; do
         read DNS_FINAL
     fi
     
+    echo "Do you want to add a PresharedKey for extra security? (y/n)"
+    read ADD_PSK
+    if [ "$ADD_PSK" = "y" ]; then
+        PRESHARED_KEY=$(wg genpsk)
+        echo "Generated PresharedKey: $PRESHARED_KEY"
+    else
+        PRESHARED_KEY=""
+    fi
+    
     # Peer keys
     PEER_PRIVKEY=$(wg genkey)
     PEER_PUBKEY=$(echo "$PEER_PRIVKEY" | wg pubkey)
@@ -102,10 +119,11 @@ while true; do
     echo ""
     echo "Creating peer with the following configuration:"
     echo "  Name: $PEER_NAME"
-    echo "  IP: $PEER_IP/24"
+    echo "  IP: $PEER_IP/32"
     echo "  DNS: $DNS_FINAL"
     echo "  Endpoint: $ENDPOINT:$PORT"
     echo "  AllowedIPs: $ALLOWED_IPS"
+    echo "  PresharedKey: $([ -n "$PRESHARED_KEY" ] && echo "Enabled" || echo "Disabled")"
     echo ""
     
     # Peer config
@@ -113,8 +131,9 @@ while true; do
     cat > "$PEER_FILE" <<EOF
 [Interface]
 PrivateKey = $PEER_PRIVKEY
-Address = $PEER_IP/24
+Address = $PEER_IP/32
 DNS = $DNS_FINAL
+MTU = 1280
 
 [Peer]
 PublicKey = $SERVER_PUBKEY
@@ -122,6 +141,11 @@ Endpoint = $ENDPOINT:$PORT
 AllowedIPs = $ALLOWED_IPS
 PersistentKeepalive = 25
 EOF
+
+    # Añadir PresharedKey solo si existe
+    if [ -n "$PRESHARED_KEY" ]; then
+        echo "PresharedKey = $PRESHARED_KEY" >> "$PEER_FILE"
+    fi
     
     echo "Peer $PEER_NAME created at $PEER_FILE"
     
@@ -132,6 +156,11 @@ EOF
 PublicKey = $PEER_PUBKEY
 AllowedIPs = $PEER_IP/32
 EOF
+
+    # Añadir PresharedKey al servidor también si existe
+    if [ -n "$PRESHARED_KEY" ]; then
+        echo "PresharedKey = $PRESHARED_KEY" >> "$WG_CONF"
+    fi
     
     echo "Peer $PEER_NAME added to $WG_CONF"
     
@@ -143,7 +172,18 @@ EOF
     fi
     
     echo ""
+    echo "Configuration summary:"
+    echo "====================="
+    echo "Client configuration saved to: $PEER_FILE"
+    echo "Server configuration updated in: $WG_CONF"
+    echo ""
+    
     echo "Do you want to add another peer to $TUNNEL_NAME? (y/n)"
     read ADD_ANOTHER
     [ "$ADD_ANOTHER" = "y" ] || { echo "Finished adding peers."; break; }
 done
+# Aquí el script continúa después del break
+echo "Reiniciando el túnel $TUNNEL_NAME..."
+wg-quick down "$TUNNEL_NAME"
+wg-quick up "$TUNNEL_NAME"
+echo "Túnel $TUNNEL_NAME reiniciado con éxito."
