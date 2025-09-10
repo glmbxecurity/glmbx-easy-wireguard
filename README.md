@@ -9,6 +9,7 @@
 
 * **Create a WireGuard tunnel** with a simple configuration file.
 * **Add multiple clients (peers)** to a tunnel with automatic IP assignment, DNS configuration, and optional full traffic routing.
+* Enhances security by adding a random PSK between server and each client.
 * **Remove clients** cleanly from both the server configuration and individual peer files.
 * Fully modular and easy to use, no advanced WireGuard knowledge required.
 * Supports multiple tunnels on the same server.
