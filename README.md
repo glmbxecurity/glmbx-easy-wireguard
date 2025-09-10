@@ -42,6 +42,7 @@ DNS=1.1.1.1
 * Adds a new client (peer) to an existing tunnel.
 * Automatically generates client private/public keys.
 * Calculates an available IP within the tunnel subnet.
+* Optionally asks you if want to generate a random PSK for enhance security.
 * Creates the peer configuration file under `./peers/<tunnel>/<peer>.conf`.
 * Appends the peer section to the server tunnel `.conf`.
 * Supports custom DNS and optional full traffic routing.
