@@ -2,6 +2,7 @@
 
 **glmbx-easy-wireguard** is a lightweight set of scripts to easily manage WireGuard VPN tunnels and clients. It simplifies the process of creating WireGuard tunnels, adding or removing clients, and maintaining proper configuration, making it ideal for both personal and small-scale professional use.
 
+![image](https://raw.githubusercontent.com/glmbxecurity/glmbx-easy-wireguard/refs/heads/main/glmbx-easy-wireguard.PNG)
 ---
 
 ## Features
