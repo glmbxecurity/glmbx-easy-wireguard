@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 set -e
 WG_DIR="/etc/wireguard"
 CONFIG_FILE="config.txt"
@@ -17,11 +17,28 @@ fi
 # Cargar configuración desde config.txt
 source "$CONFIG_FILE"
 
-# List available tunnels
+# List available tunnels (numerically selectable)
 echo "Available tunnels:"
-ls "$WG_DIR" | grep '\.conf$' | sed 's/\.conf//'
-echo "Enter the name of the tunnel to which you want to add peers:"
-read TUNNEL_NAME
+TUNNELS=($(ls "$WG_DIR" | grep '\.conf$' | sed 's/\.conf//'))
+if [ ${#TUNNELS[@]} -eq 0 ]; then
+    echo "No WireGuard tunnels found in $WG_DIR"
+    exit 1
+fi
+
+for i in "${!TUNNELS[@]}"; do
+    echo "  $((i+1))) ${TUNNELS[$i]}"
+done
+
+while true; do
+    echo ""
+    read -p "Select the tunnel number: " TUNNEL_INDEX
+    if [ "$TUNNEL_INDEX" -ge 1 ] 2>/dev/null && [ "$TUNNEL_INDEX" -le "${#TUNNELS[@]}" ]; then
+        TUNNEL_NAME="${TUNNELS[$((TUNNEL_INDEX-1))]}"
+        break
+    else
+        echo "Invalid selection. Please try again."
+    fi
+done
 
 WG_CONF="$WG_DIR/${TUNNEL_NAME}.conf"
 if [ ! -f "$WG_CONF" ]; then
@@ -97,21 +114,28 @@ while true; do
     PEER_PRIVKEY=$(wg genkey)
     PEER_PUBKEY=$(echo "$PEER_PRIVKEY" | wg pubkey)
     
-    # Calcular siguiente IP libre - CORREGIDO
+    # Calcular la primera IP libre disponible
     TUNNEL_BASE=$(echo "$TUNNEL_NET" | cut -d'/' -f1 | awk -F. '{print $1 "." $2 "." $3 "."}')
     
-    # Obtener IPs usadas de forma más robusta
-    USED_IPS=$(grep -E "AllowedIPs.*\." "$WG_CONF" | grep -o "[0-9]\+\.[0-9]\+\.[0-9]\+\.[0-9]\+/32" | cut -d'/' -f1 | awk -F. '{print $4}' | sort -n)
+    # Obtener los octetos usados actualmente (ordenados y sin duplicados)
+    USED_IPS=$(grep -E "AllowedIPs.*\." "$WG_CONF" \
+        | grep -o "[0-9]\+\.[0-9]\+\.[0-9]\+\.[0-9]\+/32" \
+        | cut -d'/' -f1 | awk -F. '{print $4}' \
+        | sort -n | uniq)
     
-    # Encontrar el siguiente octeto libre
-    NEXT_OCTET=2
-    for ip in $USED_IPS; do
-        if [ "$ip" -eq "$NEXT_OCTET" ]; then
-            NEXT_OCTET=$((NEXT_OCTET+1))
-        else
+    # Buscar la primera IP no usada desde .2 hasta .254
+    for i in $(seq 2 254); do
+        if ! echo "$USED_IPS" | grep -q "^$i\$"; then
+            NEXT_OCTET=$i
             break
         fi
     done
+    
+    # Si no hay IPs disponibles
+    if [ -z "$NEXT_OCTET" ]; then
+        echo "ERROR: No free IPs available in $TUNNEL_NET"
+        exit 1
+    fi
     
     PEER_IP="${TUNNEL_BASE}${NEXT_OCTET}"
     
@@ -182,6 +206,7 @@ EOF
     read ADD_ANOTHER
     [ "$ADD_ANOTHER" = "y" ] || { echo "Finished adding peers."; break; }
 done
+
 # Aquí el script continúa después del break
 echo "Reiniciando el túnel $TUNNEL_NAME..."
 wg-quick down "$TUNNEL_NAME"
