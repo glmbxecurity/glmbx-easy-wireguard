@@ -1,104 +1,73 @@
-# glmbx-easy-wireguard
+# glmbx-easy-wireguard 🛡️
 
-**glmbx-easy-wireguard** is a lightweight set of scripts to easily manage WireGuard VPN tunnels and clients. It simplifies the process of creating WireGuard tunnels, adding or removing clients, and maintaining proper configuration, making it ideal for both personal and small-scale professional use.
+**glmbx-easy-wireguard** is a lightweight set of Bash scripts to easily manage WireGuard VPN tunnels and clients on Linux (optimized for Alpine/Debian).
+
+It simplifies the process of creating WireGuard tunnels, handling **NAT/Firewall rules** automatically, adding/removing clients with **Hot-Reload** (no downtime), and generating QR codes.
 
 ![image](https://raw.githubusercontent.com/glmbxecurity/glmbx-easy-wireguard/refs/heads/main/glmbx-easy-wireguard.PNG)
----
-
-## Features
-
-* **Create a WireGuard tunnel** with a simple configuration file.
-* **Add multiple clients (peers)** to a tunnel with automatic IP assignment, DNS configuration, and optional full traffic routing.
-* Enhances security by adding a random PSK between server and each client.
-* **Remove clients** cleanly from both the server configuration and individual peer files.
-* Fully modular and easy to use, no advanced WireGuard knowledge required.
-* Supports multiple tunnels on the same server.
 
 ---
 
-## Scripts
+## Features ✨
 
-The project contains **three main scripts**:
+* **Auto NAT & Routing:** Automatically configures `iptables` and IP Forwarding to allow clients to access the Internet.
+* **Zero Downtime:** Add or remove clients without restarting the interface (uses `wg syncconf`).
+* **Smart Keepalive:** Automatically configures `PersistentKeepalive` to maintain connections on unstable networks (4G/5G).
+* **QR Code Generator:** Display connection QR codes directly in the terminal.
+* **Security:** Optional Preshared Keys (PSK) and randomized keys for every peer.
+
+---
+
+## Scripts 📂
 
 ### 1. `create_tunnel.sh`
-
-* Reads server and tunnel parameters from `config.txt`.
-* Generates server private/public keys.
-* Creates the WireGuard tunnel configuration in `/etc/wireguard/<tunnel>.conf`.
-* Optionally prompts to add clients immediately after creating the tunnel.
-* Example `config.txt` structure:
-
-```ini
-TUNNEL_NAME=glmbx
-ENDPOINT=vpn.example.com
-PORT=51820
-TUNNEL_NET=10.10.0.0/24
-SERVER_IP=10.10.0.1
-DNS=1.1.1.1
-```
+* Reads parameters from `config.txt`.
+* Creates the interface config with **IP Masquerading (NAT)** rules.
+* Sets up system persistence (OpenRC/Systemd).
 
 ### 2. `add_peer.sh`
-
-* Adds a new client (peer) to an existing tunnel.
-* Automatically generates client private/public keys.
-* Calculates an available IP within the tunnel subnet.
-* Optionally asks you if want to generate a random PSK for enhance security.
-* Creates the peer configuration file under `./peers/<tunnel>/<peer>.conf`.
-* Appends the peer section to the server tunnel `.conf`.
-* Supports custom DNS and optional full traffic routing.
-* Can add multiple peers in a single run.
+* Adds a new client to an existing tunnel.
+* Calculates the next available IP automatically.
+* Applies changes instantly (**Hot-Reload**) without disconnecting other users.
+* Generates a QR code at the end.
 
 ### 3. `remove_peer.sh`
+* Cleanly removes a client from the config and deletes their file.
+* Updates the live interface instantly.
 
-* Removes a client (peer) from a tunnel.
-* Deletes both the peer configuration file (`./peers/<tunnel>/<peer>.conf`) and its entry in the server `.conf`.
-* Ensures clean removal without leaving orphaned entries.
+### 4. `qr_tunnel_generator.sh`
+* Scans for existing client configurations and generates a QR code on demand.
 
 ---
 
-## How to Use
+## How to Use 🚀
 
-1. **Edit the configuration file** (`config.txt`) with your tunnel information.
+1. **Install Dependencies**:
+   ```bash
+   # Alpine
+   apk add bash wireguard-tools libqrencode
+   # Debian/Ubuntu
+   apt install wireguard qrencode
+   ```
 
-2. **Create a tunnel**:
+2. **Edit Configuration**:
+   Modify `config.txt` with your server's Public IP and desired settings.
 
-```bash
-sudo bash create_tunnel.sh
-```
+3. **Create Tunnel**:
+   ```bash
+   ./create_tunnel.sh
+   ```
+   *Follow the prompts to enable Internet access (NAT) via your main interface (e.g., eth0).*
 
-* The script will display a summary of the tunnel configuration for confirmation.
-* You can choose to add clients immediately after creation.
+4. **Add Clients**:
+   ```bash
+   ./add_peer.sh
+   ```
 
-3. **Add clients**:
-
-```bash
-sudo bash add_peer.sh
-```
-
-* Select the tunnel and provide client details.
-* Choose whether to route all traffic through the VPN or only specific subnets.
-* Configure DNS for each client.
-
-4. **Remove clients**:
-
-```bash
-sudo bash remove_peer.sh
-```
-
-* Select the tunnel and the client to remove.
-* The client configuration file and server configuration entry will be removed automatically.
-
-5. **Start the tunnel**:
-
-```bash
-sudo wg-quick up <TUNNEL_NAME>
-```
-
-6. **Stop the tunnel**:
-
-```bash
-sudo wg-quick down <TUNNEL_NAME>
-```
+5. **Show QR Codes later**:
+   ```bash
+   ./qr_tunnel_generator.sh
+   ```
 
 ---
 
@@ -106,19 +75,16 @@ sudo wg-quick down <TUNNEL_NAME>
 
 ```
 .
-├── create_tunnel.sh      # Script to create a new WireGuard tunnel
-├── add_peer.sh           # Script to add clients to a tunnel
-├── remove_peer.sh        # Script to remove clients from a tunnel
-├── config.txt            # Tunnel configuration template
+├── create_tunnel.sh      # Setup script
+├── add_peer.sh           # Client creator (Hot-reload)
+├── remove_peer.sh        # Client remover (Hot-reload)
+├── qr_tunnel_generator.sh# QR Helper
+├── config.txt            # Settings template
 └── peers/
-    └── <tunnel>/
-        └── <peer>.conf  # Individual client configurations
+    └── <tunnel_name>/
+        └── <peer_name>.conf  # Generated client configs
 ```
 
----
-
 ## Notes
-
-* Keys are generated automatically using `wg genkey`.
-* Ensure `/etc/wireguard` is writable by the user running the scripts.
-* Make sure `WireGuard` is installed on the system.
+* Ensure you run these scripts as **root**.
+* If you are behind a NAT, remember to port-forward the UDP port (default 51820) on your router.
