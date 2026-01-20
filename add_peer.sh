@@ -2,22 +2,23 @@
 set -e
 WG_DIR="/etc/wireguard"
 CONFIG_FILE="config.txt"
+# KEEPALIVE: 25s es el estándar para evitar cortes por NAT y asegurar monitoreo
+KEEPALIVE=25
 
 clear
 echo "=============================="
 echo "GLMBX WIREGUARD PEER-CREATOR"
 echo "=============================="
 
-# Verificar que existe el archivo de configuración
+# Verificar config.txt
 if [ ! -f "$CONFIG_FILE" ]; then
     echo "Configuration file $CONFIG_FILE not found!"
     exit 1
 fi
 
-# Cargar configuración desde config.txt
 source "$CONFIG_FILE"
 
-# List available tunnels (numerically selectable)
+# Listar túneles
 echo "Available tunnels:"
 TUNNELS=($(ls "$WG_DIR" | grep '\.conf$' | sed 's/\.conf//'))
 if [ ${#TUNNELS[@]} -eq 0 ]; then
@@ -41,40 +42,19 @@ while true; do
 done
 
 WG_CONF="$WG_DIR/${TUNNEL_NAME}.conf"
-if [ ! -f "$WG_CONF" ]; then
-    echo "Tunnel $TUNNEL_NAME not found in $WG_DIR"
-    exit 1
-fi
-
-# Server pubkey - intentar obtenerla de diferentes formas
 SERVER_PUBKEY_FILE="$WG_DIR/${TUNNEL_NAME}-pubkey"
+
+# Obtener Server Public Key
 if [ -f "$SERVER_PUBKEY_FILE" ]; then
-    # Método 1: Archivo de clave pública (túneles creados con script)
     SERVER_PUBKEY=$(cat "$SERVER_PUBKEY_FILE")
-    echo "Using server public key from file: $SERVER_PUBKEY_FILE"
+    echo "Using server public key from file."
 else
-    # Método 2: Extraer de la clave privada en el archivo de configuración (túneles existentes)
-    echo "Server public key file not found, extracting from configuration..."
+    echo "Extracting server public key from configuration..."
     SERVER_PRIVKEY=$(grep "PrivateKey" "$WG_CONF" | head -n1 | cut -d'=' -f2 | tr -d ' ')
-    if [ -n "$SERVER_PRIVKEY" ]; then
-        SERVER_PUBKEY=$(echo "$SERVER_PRIVKEY" | wg pubkey)
-        echo "Extracted server public key from configuration: $SERVER_PUBKEY"
-    else
-        echo "ERROR: Could not find server private key in $WG_CONF"
-        exit 1
-    fi
+    SERVER_PUBKEY=$(echo "$SERVER_PRIVKEY" | wg pubkey)
 fi
 
-# Verificar que los valores necesarios existen
-if [ -z "$ENDPOINT" ] || [ -z "$PORT" ] || [ -z "$TUNNEL_NET" ]; then
-    echo "ERROR: Endpoint, Port or TUNNEL_NET is empty in $CONFIG_FILE"
-    echo "ENDPOINT: $ENDPOINT"
-    echo "PORT: $PORT" 
-    echo "TUNNEL_NET: $TUNNEL_NET"
-    exit 1
-fi
-
-# Peers folder
+# Directorio de peers
 PEERS_DIR="./peers/${TUNNEL_NAME}"
 mkdir -p "$PEERS_DIR"
 
@@ -83,47 +63,31 @@ while true; do
     echo "Peer name:"
     read PEER_NAME
     
-    echo "Do you want to route all traffic through the tunnel? (y/n)"
+    echo "Route all traffic? (y/n)"
     read ROUTE_ALL
     if [ "$ROUTE_ALL" = "y" ]; then
         ALLOWED_IPS="0.0.0.0/0"
     else
-        echo "Enter the networks to route (e.g., 192.168.1.0/24,10.0.0.0/8):"
+        echo "Enter allowed IPs (e.g. 192.168.1.0/24):"
         read ALLOWED_IPS
     fi
     
-    echo "Do you want to use the default DNS ($DNS)? (y/n)"
+    echo "Use default DNS ($DNS)? (y/n)"
     read USE_DEFAULT_DNS
-    if [ "$USE_DEFAULT_DNS" = "y" ]; then
-        DNS_FINAL=$DNS
-    else
-        echo "Enter the DNS you want to use:"
-        read DNS_FINAL
-    fi
+    [ "$USE_DEFAULT_DNS" = "y" ] && DNS_FINAL=$DNS || { echo "Enter DNS:"; read DNS_FINAL; }
     
-    echo "Do you want to add a PresharedKey for extra security? (y/n)"
+    echo "Add PresharedKey? (y/n)"
     read ADD_PSK
-    if [ "$ADD_PSK" = "y" ]; then
-        PRESHARED_KEY=$(wg genpsk)
-        echo "Generated PresharedKey: $PRESHARED_KEY"
-    else
-        PRESHARED_KEY=""
-    fi
+    [ "$ADD_PSK" = "y" ] && PRESHARED_KEY=$(wg genpsk) || PRESHARED_KEY=""
     
-    # Peer keys
+    # Generar llaves cliente
     PEER_PRIVKEY=$(wg genkey)
     PEER_PUBKEY=$(echo "$PEER_PRIVKEY" | wg pubkey)
     
-    # Calcular la primera IP libre disponible
+    # Calcular IP libre
     TUNNEL_BASE=$(echo "$TUNNEL_NET" | cut -d'/' -f1 | awk -F. '{print $1 "." $2 "." $3 "."}')
+    USED_IPS=$(grep -E "AllowedIPs.*\." "$WG_CONF" | grep -o "[0-9]\+\.[0-9]\+\.[0-9]\+\.[0-9]\+/32" | cut -d'/' -f1 | awk -F. '{print $4}' | sort -n | uniq)
     
-    # Obtener los octetos usados actualmente (ordenados y sin duplicados)
-    USED_IPS=$(grep -E "AllowedIPs.*\." "$WG_CONF" \
-        | grep -o "[0-9]\+\.[0-9]\+\.[0-9]\+\.[0-9]\+/32" \
-        | cut -d'/' -f1 | awk -F. '{print $4}' \
-        | sort -n | uniq)
-    
-    # Buscar la primera IP no usada desde .2 hasta .254
     for i in $(seq 2 254); do
         if ! echo "$USED_IPS" | grep -q "^$i\$"; then
             NEXT_OCTET=$i
@@ -131,26 +95,10 @@ while true; do
         fi
     done
     
-    # Si no hay IPs disponibles
-    if [ -z "$NEXT_OCTET" ]; then
-        echo "ERROR: No free IPs available in $TUNNEL_NET"
-        exit 1
-    fi
-    
+    if [ -z "$NEXT_OCTET" ]; then echo "ERROR: No free IPs available"; exit 1; fi
     PEER_IP="${TUNNEL_BASE}${NEXT_OCTET}"
     
-    # Mostrar información del peer que se va a crear
-    echo ""
-    echo "Creating peer with the following configuration:"
-    echo "  Name: $PEER_NAME"
-    echo "  IP: $PEER_IP/32"
-    echo "  DNS: $DNS_FINAL"
-    echo "  Endpoint: $ENDPOINT:$PORT"
-    echo "  AllowedIPs: $ALLOWED_IPS"
-    echo "  PresharedKey: $([ -n "$PRESHARED_KEY" ] && echo "Enabled" || echo "Disabled")"
-    echo ""
-    
-    # Peer config
+    # --- GENERAR ARCHIVO CLIENTE ---
     PEER_FILE="$PEERS_DIR/${PEER_NAME}.conf"
     cat > "$PEER_FILE" <<EOF
 [Interface]
@@ -163,52 +111,41 @@ MTU = 1280
 PublicKey = $SERVER_PUBKEY
 Endpoint = $ENDPOINT:$PORT
 AllowedIPs = $ALLOWED_IPS
-PersistentKeepalive = 25
+PersistentKeepalive = $KEEPALIVE
 EOF
-
-    # Añadir PresharedKey solo si existe
-    if [ -n "$PRESHARED_KEY" ]; then
-        echo "PresharedKey = $PRESHARED_KEY" >> "$PEER_FILE"
-    fi
+    [ -n "$PRESHARED_KEY" ] && echo "PresharedKey = $PRESHARED_KEY" >> "$PEER_FILE"
     
-    echo "Peer $PEER_NAME created at $PEER_FILE"
-    
-    # Add peer to server
+    # --- ACTUALIZAR SERVIDOR ---
     cat >> "$WG_CONF" <<EOF
 # Peer: $PEER_NAME
 [Peer]
 PublicKey = $PEER_PUBKEY
 AllowedIPs = $PEER_IP/32
+PersistentKeepalive = $KEEPALIVE
 EOF
+    [ -n "$PRESHARED_KEY" ] && echo "PresharedKey = $PRESHARED_KEY" >> "$WG_CONF"
+    
+    echo "✅ Peer $PEER_NAME added ($PEER_IP)"
 
-    # Añadir PresharedKey al servidor también si existe
-    if [ -n "$PRESHARED_KEY" ]; then
-        echo "PresharedKey = $PRESHARED_KEY" >> "$WG_CONF"
-    fi
-    
-    echo "Peer $PEER_NAME added to $WG_CONF"
-    
-    # Mostrar el código QR si qrencode está disponible
+    # Mostrar QR
     if command -v qrencode >/dev/null 2>&1; then
-        echo ""
         echo "QR Code for $PEER_NAME:"
         qrencode -t ansiutf8 < "$PEER_FILE"
     fi
-    
-    echo ""
-    echo "Configuration summary:"
-    echo "====================="
-    echo "Client configuration saved to: $PEER_FILE"
-    echo "Server configuration updated in: $WG_CONF"
-    echo ""
-    
-    echo "Do you want to add another peer to $TUNNEL_NAME? (y/n)"
+
+    echo "Add another? (y/n)"
     read ADD_ANOTHER
-    [ "$ADD_ANOTHER" = "y" ] || { echo "Finished adding peers."; break; }
+    [ "$ADD_ANOTHER" = "y" ] || break
 done
 
-# Aquí el script continúa después del break
-echo "Reiniciando el túnel $TUNNEL_NAME..."
-wg-quick down "$TUNNEL_NAME"
-wg-quick up "$TUNNEL_NAME"
-echo "Túnel $TUNNEL_NAME reiniciado con éxito."
+# --- HOT RELOAD (Sin reiniciar interfaz) ---
+echo "Aplicando cambios..."
+if ip link show "$TUNNEL_NAME" > /dev/null 2>&1; then
+    # Sincronización en caliente
+    wg syncconf "$TUNNEL_NAME" <(wg-quick strip "$TUNNEL_NAME")
+    echo "✅ Cambios aplicados en caliente. Sin cortes."
+else
+    # Si estaba apagado, encender
+    wg-quick up "$TUNNEL_NAME"
+    echo "✅ Túnel iniciado."
+fi
